@@ -536,7 +536,7 @@ class Connection(object):
                  autocommit=False, db=None, passwd=None, local_infile=False,
                  max_allowed_packet=16*1024*1024, defer_connect=False,
                  auth_plugin_map={}, read_timeout=None, write_timeout=None,
-                 bind_address=None):
+                 bind_address=None, socket_constructor=None):
         """
         Establish a connection to the MySQL database. Accepts several
         arguments:
@@ -700,6 +700,7 @@ class Connection(object):
         self.init_command = init_command
         self.max_allowed_packet = max_allowed_packet
         self._auth_plugin_map = auth_plugin_map
+        self.socket_constructor = socket_constructor if socket_constructor else socket.socket
         if defer_connect:
             self._sock = None
         else:
@@ -900,7 +901,7 @@ class Connection(object):
         try:
             if sock is None:
                 if self.unix_socket and self.host in ('localhost', '127.0.0.1'):
-                    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                    sock = self.socket_constructor(socket.AF_UNIX, socket.SOCK_STREAM)
                     sock.settimeout(self.connect_timeout)
                     sock.connect(self.unix_socket)
                     self.host_info = "Localhost via UNIX socket"
@@ -911,7 +912,7 @@ class Connection(object):
                         kwargs['source_address'] = (self.bind_address, 0)
                     while True:
                         try:
-                            sock = socket.create_connection(
+                            sock = self.create_socket_connection(
                                 (self.host, self.port), self.connect_timeout,
                                 **kwargs)
                             break
@@ -966,6 +967,43 @@ class Connection(object):
             # But raising AssertionError hides original error.
             # So just reraise it.
             raise
+
+    def create_socket_connection(self, address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT,
+                                 source_address=None):
+        """Connect to *address* and return the socket object.
+        Convenience function.  Connect to *address* (a 2-tuple ``(host,
+        port)``) and return the socket object.  Passing the optional
+        *timeout* parameter will set the timeout on the socket instance
+        before attempting to connect.  If no *timeout* is supplied, the
+        global default timeout setting returned by :func:`getdefaulttimeout`
+        is used.  If *source_address* is set it must be a tuple of (host, port)
+        for the socket to bind as a source address before making the connection.
+        A host of '' or port 0 tells the OS to use the default.
+        """
+
+        host, port = address
+        err = None
+        for res in socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM):
+            af, socktype, proto, canonname, sa = res
+            sock = None
+            try:
+                sock = self.socket_constructor(af, socktype, proto)
+                if timeout is not socket._GLOBAL_DEFAULT_TIMEOUT:
+                    sock.settimeout(timeout)
+                if source_address:
+                    sock.bind(source_address)
+                sock.connect(sa)
+                return sock
+
+            except socket.error as _:
+                err = _
+                if sock is not None:
+                    sock.close()
+
+        if err is not None:
+            raise err
+        else:
+            raise socket.error("getaddrinfo returns an empty list")
 
     def write_packet(self, payload):
         """Writes an entire "mysql packet" in its entirety to the network
