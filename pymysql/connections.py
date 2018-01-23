@@ -899,35 +899,39 @@ class Connection(object):
         self.charset = charset
         self.encoding = encoding
 
+    def _connect_socket(self):
+        if self.unix_socket and self.host in ('localhost', '127.0.0.1'):
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.settimeout(self.connect_timeout)
+            sock.connect(self.unix_socket)
+            self.host_info = "Localhost via UNIX socket"
+            if DEBUG: print('connected using unix_socket')
+        else:
+            kwargs = {}
+            if self.bind_address is not None:
+                kwargs['source_address'] = (self.bind_address, 0)
+            while True:
+                try:
+                    sock = socket.create_connection(
+                        (self.host, self.port), self.connect_timeout,
+                        **kwargs)
+                    break
+                except (OSError, IOError) as e:
+                    if e.errno == errno.EINTR:
+                        continue
+                    raise
+            self.host_info = "socket %s:%d" % (self.host, self.port)
+            if DEBUG: print('connected using socket')
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        sock.settimeout(None)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        return sock
+
     def connect(self, sock=None):
         self._closed = False
         try:
             if sock is None:
-                if self.unix_socket and self.host in ('localhost', '127.0.0.1'):
-                    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                    sock.settimeout(self.connect_timeout)
-                    sock.connect(self.unix_socket)
-                    self.host_info = "Localhost via UNIX socket"
-                    if DEBUG: print('connected using unix_socket')
-                else:
-                    kwargs = {}
-                    if self.bind_address is not None:
-                        kwargs['source_address'] = (self.bind_address, 0)
-                    while True:
-                        try:
-                            sock = socket.create_connection(
-                                (self.host, self.port), self.connect_timeout,
-                                **kwargs)
-                            break
-                        except (OSError, IOError) as e:
-                            if e.errno == errno.EINTR:
-                                continue
-                            raise
-                    self.host_info = "socket %s:%d" % (self.host, self.port)
-                    if DEBUG: print('connected using socket')
-                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                sock.settimeout(None)
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                sock = self._connect_socket()
             self._sock = sock
             self._rfile = _makefile(sock, 'rb')
             self._next_seq_id = 0
