@@ -576,7 +576,7 @@ class Connection(object):
                  autocommit=False, db=None, passwd=None, local_infile=False,
                  max_allowed_packet=16*1024*1024, defer_connect=False,
                  auth_plugin_map={}, read_timeout=None, write_timeout=None,
-                 bind_address=None, binary_prefix=False):
+                 bind_address=None, binary_prefix=False, socket_factory=None):
         if no_delay is not None:
             warnings.warn("no_delay option is deprecated", DeprecationWarning)
 
@@ -693,6 +693,7 @@ class Connection(object):
         self.max_allowed_packet = max_allowed_packet
         self._auth_plugin_map = auth_plugin_map
         self._binary_prefix = binary_prefix
+        self.socket_factory = socket_factory
         if defer_connect:
             self._sock = None
         else:
@@ -900,6 +901,17 @@ class Connection(object):
         self.encoding = encoding
 
     def _connect_socket(self):
+        if self.socket_factory is not None:
+            sock, host_info = self.socket_factory(
+                unix_socket=self.unix_socket,
+                host=self.host,
+                port=self.port,
+                bind_address=self.bind_address,
+                connect_timeout=self.connect_timeout
+            )
+            self.host_info = host_info
+            if DEBUG: print('connected using socket factory')
+            return sock
         if self.unix_socket and self.host in ('localhost', '127.0.0.1'):
             sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             sock.settimeout(self.connect_timeout)
