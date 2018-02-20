@@ -707,8 +707,12 @@ class Connection(object):
             self.connect()
 
     def _create_ssl_ctx(self, sslp):
-        if isinstance(sslp, ssl.SSLContext):
-            return sslp
+        try:
+            if isinstance(sslp, ssl.SSLContext):
+                return sslp
+        except AttributeError:
+            # ssl.SSLContext is not available until Python 2.7.11, we run this with 2.7.6
+            pass
         ca = sslp.get('ca')
         capath = sslp.get('capath')
         hasnoca = ca is None and capath is None
