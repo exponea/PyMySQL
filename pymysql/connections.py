@@ -25,7 +25,10 @@ from .util import byte2int, int2byte
 from . import err
 
 try:
-    import ssl
+    try:
+        import backports.ssl
+    except ImportError:
+        import ssl
     SSL_ENABLED = True
 except ImportError:
     ssl = None
@@ -707,12 +710,8 @@ class Connection(object):
             self.connect()
 
     def _create_ssl_ctx(self, sslp):
-        try:
-            if isinstance(sslp, ssl.SSLContext):
-                return sslp
-        except AttributeError:
-            # ssl.SSLContext is not available until Python 2.7.11, we run this with 2.7.6
-            pass
+        if isinstance(sslp, ssl.SSLContext):
+            return sslp
         ca = sslp.get('ca')
         capath = sslp.get('capath')
         hasnoca = ca is None and capath is None
