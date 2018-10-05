@@ -191,7 +191,7 @@ class Connection(object):
                  max_allowed_packet=16*1024*1024, defer_connect=False,
                  auth_plugin_map=None, read_timeout=None, write_timeout=None,
                  bind_address=None, binary_prefix=False, program_name=None,
-                 server_public_key=None):
+                 server_public_key=None, socket_factory=None):
         if use_unicode is None and sys.version_info[0] > 2:
             use_unicode = True
 
@@ -308,6 +308,7 @@ class Connection(object):
         self.max_allowed_packet = max_allowed_packet
         self._auth_plugin_map = auth_plugin_map or {}
         self._binary_prefix = binary_prefix
+        self.socket_factory = socket_factory
         self.server_public_key = server_public_key
 
         self._connect_attrs = {
@@ -559,36 +560,50 @@ class Connection(object):
         self.charset = charset
         self.encoding = encoding
 
+    def _connect_socket(self):
+        if self.socket_factory is not None:
+            sock, host_info = self.socket_factory(
+                unix_socket=self.unix_socket,
+                host=self.host,
+                port=self.port,
+                bind_address=self.bind_address,
+                connect_timeout=self.connect_timeout
+            )
+            self.host_info = host_info
+            if DEBUG: print('connected using socket factory')
+            return sock
+        if self.unix_socket and self.host in ('localhost', '127.0.0.1'):
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.settimeout(self.connect_timeout)
+            sock.connect(self.unix_socket)
+            self.host_info = "Localhost via UNIX socket"
+            if DEBUG: print('connected using unix_socket')
+        else:
+            kwargs = {}
+            if self.bind_address is not None:
+                kwargs['source_address'] = (self.bind_address, 0)
+            while True:
+                try:
+                    sock = socket.create_connection(
+                        (self.host, self.port), self.connect_timeout,
+                        **kwargs)
+                    break
+                except (OSError, IOError) as e:
+                    if e.errno == errno.EINTR:
+                        continue
+                    raise
+            self.host_info = "socket %s:%d" % (self.host, self.port)
+            if DEBUG: print('connected using socket')
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        sock.settimeout(None)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        return sock
+
     def connect(self, sock=None):
         self._closed = False
         try:
             if sock is None:
-                if self.unix_socket:
-                    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                    sock.settimeout(self.connect_timeout)
-                    sock.connect(self.unix_socket)
-                    self.host_info = "Localhost via UNIX socket"
-                    self._secure = True
-                    if DEBUG: print('connected using unix_socket')
-                else:
-                    kwargs = {}
-                    if self.bind_address is not None:
-                        kwargs['source_address'] = (self.bind_address, 0)
-                    while True:
-                        try:
-                            sock = socket.create_connection(
-                                (self.host, self.port), self.connect_timeout,
-                                **kwargs)
-                            break
-                        except (OSError, IOError) as e:
-                            if e.errno == errno.EINTR:
-                                continue
-                            raise
-                    self.host_info = "socket %s:%d" % (self.host, self.port)
-                    if DEBUG: print('connected using socket')
-                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                sock.settimeout(None)
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                sock = self._connect_socket()
             self._sock = sock
             self._rfile = _makefile(sock, 'rb')
             self._next_seq_id = 0
